@@ -80,7 +80,7 @@ class DownPlanet:
 
         for idx in self.search_df.index:
             self.logger.info(f'Downloading image {idx}')
-            self.download(idx=idx, out_dir)
+            self.download(idx=idx, out_dir=out_dir)
 
 
 

@@ -1,2 +1,2 @@
 # downplanet
-Downloader for Microsoft Planetary Computer
+Simple Sentinel2 downloader for Microsoft Planetary Computer.

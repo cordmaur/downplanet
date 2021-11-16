@@ -3,11 +3,12 @@ import logging
 from typing import Union
 from pathlib import Path
 import pandas as pd
-from .common import create_geometry, rm_tree
+from .common import create_geometry, rm_tree, requests_retry_session
 import planetary_computer as pc
 import requests
+
 from urllib.parse import urlparse
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 catalog_url = "https://planetarycomputer.microsoft.com/api/stac/v1"
 s2_collection = 'sentinel-2-l2a'
@@ -70,26 +71,30 @@ class DownPlanet:
 
         self.logger.info(f'{len(self.search_df)} images found. Access .search_df for the list.')
 
-    def download_all(self, out_dir: Union[Path, str]):
+    def download_all(self, out_dir: Union[Path, str], show_pbar=True):
         """
         Download all the images that are in the search_df to the out_dir
         :param out_dir:
+        :param show_pbar:
         :return:
         """
 
+        if show_pbar:
+            iterator = tqdm(self.search_df.index, desc='All images', unit=' img')
+        else:
+            iterator = self.search_df.index
 
-        for idx in self.search_df.index:
-            self.logger.info(f'Downloading image {idx}')
+        for idx in iterator:
+            self.logger.debug(f'Downloading image {idx}')
             self.download(idx=idx, out_dir=out_dir)
-
-
 
     def download(self, idx: str, out_dir: Union[Path, str]):
         """
-
-        :param idx:
-        :param out_dir:
-        :return:
+        Download an item that is in the search_df. A directory for the specific item will be created in the
+        output directory
+        :param idx: index of the item to download
+        :param out_dir: output directory
+        :return: request response
         """
 
         # check if there is a previous search
@@ -117,41 +122,75 @@ class DownPlanet:
             rm_tree(out_dir)
         out_dir.mkdir(exist_ok=True)
 
-        # loop through the items
-        for asset_name, asset in item.assets.items():
-            self.logger.debug(f'Downloading asset {asset_name}')
-            self.download_asset(asset, out_dir)
+        # open a session that handles retries
+        session = requests_retry_session(5, status_forcelist=None)
 
-    def download_asset(self, asset, out_dir, pbar=False):
+        # Sign the item. The hrefs of the assets are updated with a token
+        signed_item = self.sign_item(item, session=session)
 
-        href = pc.sign(asset.href)
+        # Download the assets
+        with tqdm(total=signed_item.size, unit_scale=True, unit='b', desc=signed_item.id, smoothing=0) as pbar:
+            for asset_name, asset in signed_item.assets.items():
+                self.logger.debug(f'Downloading asset {asset_name}')
+                self.download_asset(asset, out_dir, session=session, pbar=pbar)
 
-        r = requests.get(href, stream=True)
+    def download_asset(self, asset, out_dir, session=None, pbar=None, sign=False):
+        """
+        Download an asset to the out_dir.
+        :param asset: Item's asset to download (must contain .href member)
+        :param out_dir: output directory
+        :param session: Existing session. Otherwise, create it.
+        :param pbar: if there is a progress bar, use it to update download
+        :param sign: if True, sign the asset before starting the download
+        :return: request response
+        """
+
+        # get the session
+        session = session if session is not None else requests.Session()
+
+        # if asset not signed, sign the asset
+        href = pc.sign(asset.href) if sign else asset.href
+
+        # open the get request in background (stream=True)
+        r = session.get(href, stream=True)
         if not r.ok:
             self.logger.error(f'Error getting {href}')
-            return
+            return r
         else:
             self.logger.debug(f'Downloading asset {asset.title}')
 
         # create the output file name
-        file_name = Path(urlparse(href).path).name
+        file_name = Path(urlparse(asset.href).path).name
         file_path = Path(out_dir)/file_name
 
-        # with open(file_path.as_posix(), 'wb') as f:
-        #     total_length = int(r.headers.get('content-length'))
-        #     for chunk in tqdm(r.iter_content(chunk_size=1024), total=(total_length/1024), unit='kb'):
-        #         if chunk:
-        #             f.write(chunk)
-        #             f.flush()
-
         with open(file_path.as_posix(), 'wb') as f:
-            total_length = int(r.headers.get('content-length'))
             for chunk in r.iter_content(chunk_size=1024):
                 if chunk:
                     f.write(chunk)
                     f.flush()
+                    if pbar is not None:
+                        pbar.update(1024)
 
+    @staticmethod
+    def sign_item(item, session=None):
+        """
+        Sign all the assets in a specific item and calculate the total size.
+        :param item: stac_item
+        :param session: Existing session. If None, create a simple session.
+        :return: item with assets' hrefs already signed and a member .size
+        """
 
+        # sign the whole item
+        signed_item = pc.sign(item)
 
+        session = session if session is not None else requests.Session()
 
+        total_size = 0
+        for asset in signed_item.assets.values():
+            r = session.head(asset.href)
+            total_size += int(r.headers.get('content-length'))
+            r.close()
 
+        signed_item.size = total_size
+
+        return signed_item

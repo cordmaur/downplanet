@@ -86,7 +86,13 @@ class DownPlanet:
 
         for idx in iterator:
             self.logger.debug(f'Downloading image {idx}')
-            self.download(idx=idx, out_dir=out_dir)
+            r = self.download(idx=idx, out_dir=out_dir)
+
+            # if there is an error
+            if r is not True:
+                return r
+        
+
 
     def download(self, idx: str, out_dir: Union[Path, str]):
         """
@@ -123,7 +129,8 @@ class DownPlanet:
         out_dir.mkdir(exist_ok=True)
 
         # open a session that handles retries
-        session = requests_retry_session(5, status_forcelist=None)
+        # session = requests_retry_session(5, status_forcelist=None)
+        session = None
 
         # Sign the item. The hrefs of the assets are updated with a token
         signed_item = self.sign_item(item, session=session)
@@ -132,7 +139,14 @@ class DownPlanet:
         with tqdm(total=signed_item.size, unit_scale=True, unit='b', desc=signed_item.id, smoothing=0) as pbar:
             for asset_name, asset in signed_item.assets.items():
                 self.logger.debug(f'Downloading asset {asset_name}')
-                self.download_asset(asset, out_dir, session=session, pbar=pbar)
+                r = self.download_asset(asset, out_dir, session=session, pbar=pbar)
+
+                # we had an error
+                if r is not True:
+                    return r
+        
+        return True
+
 
     def download_asset(self, asset, out_dir, session=None, pbar=None, sign=False):
         """
@@ -146,7 +160,7 @@ class DownPlanet:
         """
 
         # get the session
-        session = session if session is not None else requests.Session()
+        session = session if session is not None else requests #.session
 
         # if asset not signed, sign the asset
         href = pc.sign(asset.href) if sign else asset.href
@@ -163,13 +177,20 @@ class DownPlanet:
         file_name = Path(urlparse(asset.href).path).name
         file_path = Path(out_dir)/file_name
 
-        with open(file_path.as_posix(), 'wb') as f:
-            for chunk in r.iter_content(chunk_size=1024):
-                if chunk:
-                    f.write(chunk)
-                    f.flush()
-                    if pbar is not None:
-                        pbar.update(1024)
+        try:
+            with open(file_path.as_posix(), 'wb') as f:
+                for chunk in r.iter_content(chunk_size=1024):
+                    if chunk:
+                        f.write(chunk)
+                        f.flush()
+                        if pbar is not None:
+                            pbar.update(1024)
+            
+            return True
+
+        except Exception as e:
+            print(e)
+            return r
 
     @staticmethod
     def sign_item(item, session=None):
@@ -183,7 +204,7 @@ class DownPlanet:
         # sign the whole item
         signed_item = pc.sign(item)
 
-        session = session if session is not None else requests.Session()
+        session = session if session is not None else requests
 
         total_size = 0
         for asset in signed_item.assets.values():

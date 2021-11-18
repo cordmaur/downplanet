@@ -6,6 +6,7 @@ import pandas as pd
 from .common import create_geometry, rm_tree, requests_retry_session
 import planetary_computer as pc
 import requests
+from time import sleep
 
 from urllib.parse import urlparse
 from tqdm.notebook import tqdm
@@ -25,7 +26,7 @@ class DownPlanet:
 
         # create a logger
         logging.basicConfig(format='%(asctime)s %(levelname)s:%(message)s',
-                            level=logging.WARNING, datefmt='%I:%M:%S')
+                            level=logging.DEBUG, datefmt='%I:%M:%S')
         self.logger = logging.getLogger('DownPlanet')
         self.logger.setLevel(logger_level)
 
@@ -71,7 +72,7 @@ class DownPlanet:
 
         self.logger.info(f'{len(self.search_df)} images found. Access .search_df for the list.')
 
-    def download_all(self, out_dir: Union[Path, str], show_pbar=True):
+    def download_all(self, out_dir: Union[Path, str], show_pbar=True, retries=3):
         """
         Download all the images that are in the search_df to the out_dir
         :param out_dir:
@@ -85,12 +86,27 @@ class DownPlanet:
             iterator = self.search_df.index
 
         for idx in iterator:
-            self.logger.debug(f'Downloading image {idx}')
-            r = self.download(idx=idx, out_dir=out_dir)
+            # reset the retries count
+            counter = retries
 
-            # if there is an error
-            if r is not True:
-                return r
+            # will restart the download of the same image, if counter still 0
+            while counter > 0:
+                try:
+                    self.logger.debug(f'Downloading image {idx}')
+                    self.download(idx=idx, out_dir=out_dir)
+                    counter = 0
+                
+                except Exception as e:
+                    self.logger.error(f'Problem downloading {idx}.')
+                    self.logger.error(e)
+                    counter -= 1
+                    if counter > 0:
+                        self.logger.error(f'Waiting 60 sec. {counter} Retries left')
+                        sleep(61)
+                    else:
+                        self.logger.error(f'Skipping image')
+
+
         
 
 
@@ -129,8 +145,7 @@ class DownPlanet:
         out_dir.mkdir(exist_ok=True)
 
         # open a session that handles retries
-        # session = requests_retry_session(5, status_forcelist=None)
-        session = None
+        session = requests_retry_session(5, status_forcelist=[500, 502, 503, 504])
 
         # Sign the item. The hrefs of the assets are updated with a token
         signed_item = self.sign_item(item, session=session)
@@ -139,12 +154,8 @@ class DownPlanet:
         with tqdm(total=signed_item.size, unit_scale=True, unit='b', desc=signed_item.id, smoothing=0) as pbar:
             for asset_name, asset in signed_item.assets.items():
                 self.logger.debug(f'Downloading asset {asset_name}')
-                r = self.download_asset(asset, out_dir, session=session, pbar=pbar)
+                self.download_asset(asset, out_dir, session=session, pbar=pbar)
 
-                # we had an error
-                if r is not True:
-                    return r
-        
         return True
 
 
@@ -160,37 +171,28 @@ class DownPlanet:
         """
 
         # get the session
-        session = session if session is not None else requests #.session
+        session = session if session is not None else requests
 
         # if asset not signed, sign the asset
         href = pc.sign(asset.href) if sign else asset.href
 
         # open the get request in background (stream=True)
         r = session.get(href, stream=True)
-        if not r.ok:
-            self.logger.error(f'Error getting {href}')
-            return r
-        else:
-            self.logger.debug(f'Downloading asset {asset.title}')
+
+        self.logger.debug(f'Downloading asset {asset.title}')
 
         # create the output file name
         file_name = Path(urlparse(asset.href).path).name
         file_path = Path(out_dir)/file_name
 
-        try:
-            with open(file_path.as_posix(), 'wb') as f:
-                for chunk in r.iter_content(chunk_size=1024):
-                    if chunk:
-                        f.write(chunk)
-                        f.flush()
-                        if pbar is not None:
-                            pbar.update(1024)
+        with open(file_path.as_posix(), 'wb') as f:
+            for chunk in r.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
+                    f.flush()
+                    if pbar is not None:
+                        pbar.update(1024)
             
-            return True
-
-        except Exception as e:
-            print(e)
-            return r
 
     @staticmethod
     def sign_item(item, session=None):

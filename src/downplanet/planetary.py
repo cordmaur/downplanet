@@ -26,7 +26,7 @@ class DownPlanet:
 
         # create a logger
         logging.basicConfig(format='%(asctime)s %(levelname)s:%(message)s',
-                            level=logging.DEBUG, datefmt='%I:%M:%S')
+                            level=logging.INFO, datefmt='%I:%M:%S')
         self.logger = logging.getLogger('DownPlanet')
         self.logger.setLevel(logger_level)
 
@@ -106,10 +106,6 @@ class DownPlanet:
                     else:
                         self.logger.error(f'Skipping image')
 
-
-        
-
-
     def download(self, idx: str, out_dir: Union[Path, str]):
         """
         Download an item that is in the search_df. A directory for the specific item will be created in the
@@ -157,7 +153,6 @@ class DownPlanet:
                 self.download_asset(asset, out_dir, session=session, pbar=pbar)
 
         return True
-
 
     def download_asset(self, asset, out_dir, session=None, pbar=None, sign=False):
         """

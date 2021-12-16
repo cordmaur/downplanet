@@ -27,8 +27,13 @@ class DownPlanet:
         # create a logger
         logging.basicConfig(format='%(asctime)s %(levelname)s:%(message)s',
                             level=logging.DEBUG, datefmt='%I:%M:%S')
+
         self.logger = logging.getLogger('DownPlanet')
-        self.logger.setLevel(logger_level)
+        # self.logger.setLevel(logger_level)
+
+        loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict]
+        for logger in loggers:
+            logger.setLevel(logger_level)
 
         try:
             self.catalog = Client.open(catalog)
